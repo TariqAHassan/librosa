@@ -45,6 +45,16 @@ from .util.exceptions import ParameterError
 from .core.time_frequency import note_to_hz, hz_to_midi, hz_to_octs
 from .core.time_frequency import fft_frequencies, mel_frequencies
 
+try:
+    from tqdm import tqdm as _tqdm
+except ImportError:
+    def _tqdm(x, disable):
+        # raise iff a progress bar is requested.
+        if not disable:
+            raise ImportError("`tqdm` is not installed.")
+        else:
+            return x
+
 __all__ = ['dct',
            'mel',
            'chroma',
@@ -53,7 +63,6 @@ __all__ = ['dct',
            'cq_to_chroma',
            'window_bandwidth',
            'get_window']
-
 
 # Dictionary of window function bandwidths
 
@@ -145,10 +154,10 @@ def dct(n_filters, n_input):
     basis = np.empty((n_filters, n_input))
     basis[0, :] = 1.0 / np.sqrt(n_input)
 
-    samples = np.arange(1, 2*n_input, 2) * np.pi / (2.0 * n_input)
+    samples = np.arange(1, 2 * n_input, 2) * np.pi / (2.0 * n_input)
 
     for i in range(1, n_filters):
-        basis[i, :] = np.cos(i*samples) * np.sqrt(2.0/n_input)
+        basis[i, :] = np.cos(i * samples) * np.sqrt(2.0 / n_input)
 
     return basis
 
@@ -245,14 +254,14 @@ def mel(sr, n_fft, n_mels=128, fmin=0.0, fmax=None, htk=False,
     for i in range(n_mels):
         # lower and upper slopes for all bins
         lower = -ramps[i] / fdiff[i]
-        upper = ramps[i+2] / fdiff[i+1]
+        upper = ramps[i + 2] / fdiff[i + 1]
 
         # .. then intersect them with each other and zero
         weights[i] = np.maximum(0, np.minimum(lower, upper))
 
     if norm == 1:
         # Slaney-style mel is scaled to be approx constant energy per channel
-        enorm = 2.0 / (mel_f[2:n_mels+2] - mel_f[:n_mels])
+        enorm = 2.0 / (mel_f[2:n_mels + 2] - mel_f[:n_mels])
         weights *= enorm[:, np.newaxis]
 
     # Only check weights if f_mel[0] is positive
@@ -375,10 +384,10 @@ def chroma(sr, n_fft, n_chroma=12, A440=440.0, ctroct=5.0,
     # Project into range -n_chroma/2 .. n_chroma/2
     # add on fixed offset of 10*n_chroma to ensure all values passed to
     # rem are positive
-    D = np.remainder(D + n_chroma2 + 10*n_chroma, n_chroma) - n_chroma2
+    D = np.remainder(D + n_chroma2 + 10 * n_chroma, n_chroma) - n_chroma2
 
     # Gaussian bumps - 2*D to make them narrower
-    wts = np.exp(-0.5 * (2*D / np.tile(binwidthbins, (n_chroma, 1)))**2)
+    wts = np.exp(-0.5 * (2 * D / np.tile(binwidthbins, (n_chroma, 1))) ** 2)
 
     # normalize each column
     wts = util.normalize(wts, norm=norm, axis=0)
@@ -386,14 +395,14 @@ def chroma(sr, n_fft, n_chroma=12, A440=440.0, ctroct=5.0,
     # Maybe apply scaling for fft bins
     if octwidth is not None:
         wts *= np.tile(
-            np.exp(-0.5 * (((frqbins/n_chroma - ctroct)/octwidth)**2)),
+            np.exp(-0.5 * (((frqbins / n_chroma - ctroct) / octwidth) ** 2)),
             (n_chroma, 1))
 
     if base_c:
         wts = np.roll(wts, -3, axis=0)
 
     # remove aliasing columns, copy to ensure row-contiguity
-    return np.ascontiguousarray(wts[:, :int(1 + n_fft/2)])
+    return np.ascontiguousarray(wts[:, :int(1 + n_fft / 2)])
 
 
 def __float_window(window_spec):
@@ -427,7 +436,7 @@ def __float_window(window_spec):
 @cache(level=10)
 def constant_q(sr, fmin=None, n_bins=84, bins_per_octave=12, tuning=0.0,
                window='hann', filter_scale=1, pad_fft=True, norm=1,
-               **kwargs):
+               progress=False, **kwargs):
     r'''Construct a constant-Q basis.
 
     This uses the filter bank described by [1]_.
@@ -539,19 +548,19 @@ def constant_q(sr, fmin=None, n_bins=84, bins_per_octave=12, tuning=0.0,
                                  filter_scale=filter_scale)
 
     # Apply tuning correction
-    correction = 2.0**(float(tuning) / bins_per_octave)
+    correction = 2.0 ** (float(tuning) / bins_per_octave)
     fmin = correction * fmin
 
     # Q should be capitalized here, so we suppress the name warning
     # pylint: disable=invalid-name
-    Q = float(filter_scale) / (2.0**(1. / bins_per_octave) - 1)
+    Q = float(filter_scale) / (2.0 ** (1. / bins_per_octave) - 1)
 
     # Convert lengths back to frequencies
     freqs = Q * sr / lengths
 
     # Build the filters
     filters = []
-    for ilen, freq in zip(lengths, freqs):
+    for ilen, freq in _tqdm(zip(lengths, freqs), disable=not progress):
         # Build the filter: note, length will be ceil(ilen)
         sig = np.exp(np.arange(ilen, dtype=float) * 1j * 2 * np.pi * freq / sr)
 
@@ -566,7 +575,7 @@ def constant_q(sr, fmin=None, n_bins=84, bins_per_octave=12, tuning=0.0,
     # Pad and stack
     max_len = max(lengths)
     if pad_fft:
-        max_len = int(2.0**(np.ceil(np.log2(max_len))))
+        max_len = int(2.0 ** (np.ceil(np.log2(max_len))))
     else:
         max_len = int(np.ceil(max_len))
 
@@ -631,13 +640,13 @@ def constant_q_lengths(sr, fmin, n_bins=84, bins_per_octave=12,
     if n_bins <= 0 or not isinstance(n_bins, int):
         raise ParameterError('n_bins must be a positive integer')
 
-    correction = 2.0**(float(tuning) / bins_per_octave)
+    correction = 2.0 ** (float(tuning) / bins_per_octave)
 
     fmin = correction * fmin
 
     # Q should be capitalized here, so we suppress the name warning
     # pylint: disable=invalid-name
-    Q = float(filter_scale) / (2.0**(1. / bins_per_octave) - 1)
+    Q = float(filter_scale) / (2.0 ** (1. / bins_per_octave) - 1)
 
     # Compute the frequencies
     freq = fmin * (2.0 ** (np.arange(n_bins, dtype=float) / bins_per_octave))
@@ -813,7 +822,7 @@ def window_bandwidth(window, n=1000):
 
     if key not in WINDOW_BANDWIDTHS:
         win = get_window(window, n)
-        WINDOW_BANDWIDTHS[key] = n * np.sum(win**2) / np.sum(np.abs(win))**2
+        WINDOW_BANDWIDTHS[key] = n * np.sum(win ** 2) / np.sum(np.abs(win)) ** 2
 
     return WINDOW_BANDWIDTHS[key]
 
@@ -869,7 +878,7 @@ def get_window(window, Nx, fftbins=True):
         return window(Nx)
 
     elif (isinstance(window, (six.string_types, tuple)) or
-          np.isscalar(window)):
+              np.isscalar(window)):
         # TODO: if we add custom window functions in librosa, call them here
 
         return scipy.signal.get_window(window, Nx, fftbins=fftbins)
